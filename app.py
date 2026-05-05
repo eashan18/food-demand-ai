@@ -2,69 +2,67 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
-from datetime import datetime
-import requests
+import os
 
 # ===============================
 # LOAD MODEL
 # ===============================
-model = pickle.load(open("model.pkl", "rb"))
+model_path = os.path.join(os.path.dirname(__file__), "model.pkl")
+model = pickle.load(open(model_path, "rb"))
 
 # ===============================
-# WEATHER FUNCTION
+# LOAD FEATURE COLUMNS (IMPORTANT)
 # ===============================
-def get_weather(city):
-    try:
-        API_KEY = "2099c9ed011e4e99931112909260105"   # optional (replace later)
-        url = f"http://api.weatherapi.com/v1/current.json?key={API_KEY}&q={city}"
-        res = requests.get(url).json()
-        return res["current"]["condition"]["text"]
-    except:
-        return "Unknown"
+cols_path = os.path.join(os.path.dirname(__file__), "columns.pkl")
+feature_cols = pickle.load(open(cols_path, "rb"))
 
 # ===============================
 # UI
 # ===============================
-st.set_page_config(page_title="Food Demand AI", layout="centered")
+st.set_page_config(page_title="PredictPlate", layout="centered")
 
-st.title("🍽️ Food Demand Prediction System")
-
-st.write("Enter details to predict food demand and get recommendation")
-
-# ===============================
-# INPUTS
-# ===============================
-city = st.text_input("City", "Bangalore")
-
-week = st.slider("Week", 1, 52)
-
-checkout_price = st.number_input("Checkout Price", value=200.0)
-base_price = st.number_input("Base Price", value=250.0)
-
-emailer = st.selectbox("Email Promotion", [0, 1])
-homepage = st.selectbox("Homepage Featured", [0, 1])
+st.title("🍽️ PredictPlate AI")
+st.subheader("Smart Food Demand Prediction")
 
 # ===============================
-# PREDICT BUTTON
+# USER INPUTS
+# ===============================
+week = st.slider("Week", 1, 52, 10)
+base_price = st.number_input("Base Price", value=250)
+checkout_price = st.number_input("Checkout Price", value=200)
+
+# ===============================
+# FEATURE ENGINEERING (SAME AS TRAINING)
+# ===============================
+price_diff = base_price - checkout_price
+discount = price_diff / base_price if base_price != 0 else 0
+
+input_dict = {
+    "week": week,
+    "checkout_price": checkout_price,
+    "base_price": base_price,
+    "price_diff": price_diff,
+    "discount": discount
+}
+
+# ===============================
+# CREATE DATAFRAME + FIX FEATURES
+# ===============================
+df = pd.DataFrame([input_dict])
+
+# Add missing columns
+for col in feature_cols:
+    if col not in df.columns:
+        df[col] = 0
+
+# Reorder columns
+df = df[feature_cols]
+
+# ===============================
+# PREDICT
 # ===============================
 if st.button("Predict Demand"):
 
-    # ===============================
-    # CREATE INPUT DATA
-    # ===============================
-    df = pd.DataFrame([{
-        "week": week,
-        "checkout_price": checkout_price,
-        "base_price": base_price,
-        "emailer_for_promotion": emailer,
-        "homepage_featured": homepage,
-        "price_diff": base_price - checkout_price,
-        "discount": (base_price - checkout_price) / base_price
-    }])
-
-    # ===============================
-    # PREDICTION
-    # ===============================
     pred_log = model.predict(df)
     pred = float(np.expm1(pred_log)[0])
 
@@ -73,41 +71,30 @@ if st.button("Predict Demand"):
     # ===============================
     if pred < 100:
         level = "LOW-MODERATE"
-        rmin = int(pred * 1.05)
-        rmax = int(pred * 1.25)
+        rec_min = int(pred * 1.05)
+        rec_max = int(pred * 1.25)
+
     elif pred < 300:
         level = "MODERATE"
-        rmin = int(pred * 1.00)
-        rmax = int(pred * 1.20)
+        rec_min = int(pred * 1.00)
+        rec_max = int(pred * 1.20)
+
     else:
         level = "HIGH"
-        rmin = int(pred * 1.00)
-        rmax = int(pred * 1.15)
+        rec_min = int(pred * 1.00)
+        rec_max = int(pred * 1.15)
 
     # ===============================
-    # WEATHER + WEEKEND
+    # OUTPUT UI
     # ===============================
-    weather = get_weather(city)
-    is_weekend = datetime.now().weekday() >= 5
+    st.success(f"📊 Predicted Orders: {round(pred, 2)}")
 
-    # ===============================
-    # OUTPUT
-    # ===============================
-    st.subheader("📊 Results")
+    st.info(f"📈 Demand Level: {level}")
 
-    st.write(f"**Prediction:** {round(pred, 2)} orders")
-    st.write(f"**Demand Level:** {level}")
-    st.write(f"**Weather:** {weather}")
-    st.write(f"**Weekend:** {is_weekend}")
-    st.write(f"**Recommendation:** Prepare {rmin}–{rmax} orders")
+    st.warning(f"📦 Recommendation: Prepare {rec_min} – {rec_max} orders")
 
-    # ===============================
-    # EXPLANATION
-    # ===============================
-    st.subheader("🧠 Explanation")
-
-    st.write(f"""
-Demand is classified as **{level}** based on predicted orders.
-Weather impact is minimal and today is {'weekend' if is_weekend else 'weekday'}.
-No strong external demand drivers detected.
-""")
+    st.write("### 🧠 Explanation")
+    st.write(
+        f"Demand is {level.lower()} based on pricing and weekly trends. "
+        f"The discount level is {round(discount, 2)}, influencing customer orders."
+    )
